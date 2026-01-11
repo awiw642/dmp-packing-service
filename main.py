@@ -143,10 +143,16 @@ async def calculate_packing(request: PackingRequest):
 
     # Add items to packer
     # Each item with quantity > 1 is added as separate items
+    # LIMIT: Cap at 200 total items to prevent algorithm from hanging
+    MAX_ITEMS = 200
     total_items_requested = 0
+    items_added = 0
+
     for item in items:
         for i in range(item.quantity):
             total_items_requested += 1
+            if items_added >= MAX_ITEMS:
+                continue  # Skip adding but still count
             # py3dbp Item: name, width, height, depth, weight
             packer_item = Item(
                 f"{item.item_id}_{i}",  # Unique name: item_id + instance
@@ -156,6 +162,7 @@ async def calculate_packing(request: PackingRequest):
                 item.weight_kg
             )
             packer.add_item(packer_item)
+            items_added += 1
 
     # Run packing algorithm
     # bigger_first=True prioritizes larger items first (better space utilization)
@@ -238,6 +245,9 @@ async def calculate_packing(request: PackingRequest):
     }
 
     # Add warnings
+    if items_added < total_items_requested:
+        warnings.append(f"Only {items_added} of {total_items_requested} items were analyzed (limit: {MAX_ITEMS}). Results are approximate.")
+
     if unfitted_items:
         warnings.append(f"{len(unfitted_items)} items could not fit in the container")
 
