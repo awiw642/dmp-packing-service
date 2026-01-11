@@ -18,17 +18,15 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
           script: |
-            cd /var/www/dmp-packing-service
+            cd /srv/dmp-packing-service
 
             # Pull latest changes
             git pull origin main
 
-            # Activate virtual environment and install dependencies
-            source venv/bin/activate
-            pip install -r requirements.txt
-
-            # Restart the service
-            sudo systemctl restart dmp-packing
+            # Rebuild and restart the container
+            cd /root
+            docker compose up -d --build packing
 
             # Show status
-            sudo systemctl status dmp-packing --no-pager
+            docker compose ps packing
+            docker compose logs --tail=20 packing
