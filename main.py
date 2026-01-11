@@ -139,7 +139,7 @@ async def calculate_packing(request: PackingRequest):
         spec["depth"],
         spec["max_weight"]
     )
-    packer.addBin(container)
+    packer.add_bin(container)
 
     # Add items to packer
     # Each item with quantity > 1 is added as separate items
@@ -155,7 +155,7 @@ async def calculate_packing(request: PackingRequest):
                 item.depth_cm,
                 item.weight_kg
             )
-            packer.addItem(packer_item)
+            packer.add_item(packer_item)
 
     # Run packing algorithm
     # bigger_first=True prioritizes larger items first (better space utilization)
