@@ -1,0 +1,198 @@
+name: Update Architecture Diagrams
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - '**.py'
+      - 'ARCHITECTURE.md'
+      - '.github/workflows/update-diagrams.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - '**.py'
+      - 'ARCHITECTURE.md'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  validate-diagrams:
+    name: Validate Mermaid Diagrams
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Mermaid CLI
+        run: npm install -g @mermaid-js/mermaid-cli
+
+      - name: Extract and Validate Mermaid Diagrams
+        run: |
+          echo "Extracting mermaid diagrams from ARCHITECTURE.md..."
+
+          # Create temp directory for diagrams
+          mkdir -p .diagrams
+
+          # Extract mermaid code blocks and validate each one
+          awk '/```mermaid/,/```/' ARCHITECTURE.md | \
+          awk -v RS='```mermaid' -v ORS='' 'NR>1 {
+            gsub(/```.*/, "")
+            if (NF > 0) {
+              n++
+              print > ".diagrams/diagram_" n ".mmd"
+            }
+          }'
+
+          # Count extracted diagrams
+          DIAGRAM_COUNT=$(ls -1 .diagrams/*.mmd 2>/dev/null | wc -l)
+          echo "Found $DIAGRAM_COUNT mermaid diagrams"
+
+          if [ "$DIAGRAM_COUNT" -eq 0 ]; then
+            echo "Warning: No mermaid diagrams found in ARCHITECTURE.md"
+            exit 0
+          fi
+
+          # Validate each diagram
+          FAILED=0
+          for diagram in .diagrams/*.mmd; do
+            echo "Validating $diagram..."
+            if mmdc -i "$diagram" -o "${diagram%.mmd}.svg" 2>&1; then
+              echo "  ✓ Valid"
+            else
+              echo "  ✗ Invalid"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "Error: $FAILED diagram(s) failed validation"
+            exit 1
+          fi
+
+          echo "All diagrams validated successfully!"
+
+      - name: Generate Diagram Images
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        run: |
+          echo "Generating PNG images from mermaid diagrams..."
+
+          mkdir -p docs/diagrams
+
+          # Generate images for each diagram with meaningful names
+          COUNTER=1
+          NAMES=("system-architecture" "data-flow" "api-endpoints" "algorithm-flow" "container-specs" "deployment-pipeline" "data-models" "tech-stack")
+
+          for diagram in .diagrams/*.mmd; do
+            if [ -f "$diagram" ]; then
+              NAME="${NAMES[$((COUNTER-1))]:-diagram-$COUNTER}"
+              echo "Generating docs/diagrams/${NAME}.svg..."
+              mmdc -i "$diagram" -o "docs/diagrams/${NAME}.svg" -b transparent
+              COUNTER=$((COUNTER + 1))
+            fi
+          done
+
+          echo "Generated $(ls -1 docs/diagrams/*.svg 2>/dev/null | wc -l) diagram images"
+
+      - name: Commit Generated Diagrams
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        run: |
+          # Check if there are any changes to commit
+          if [ -d "docs/diagrams" ] && [ "$(ls -A docs/diagrams 2>/dev/null)" ]; then
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+
+            git add docs/diagrams/
+
+            # Check if there are changes to commit
+            if git diff --staged --quiet; then
+              echo "No changes to diagram images"
+            else
+              git commit -m "docs: auto-update architecture diagram images
+
+              Generated from ARCHITECTURE.md mermaid diagrams"
+              git push
+              echo "Diagram images committed and pushed"
+            fi
+          else
+            echo "No diagram images to commit"
+          fi
+
+  check-sync:
+    name: Check Diagrams Sync with Code
+    runs-on: ubuntu-latest
+    needs: validate-diagrams
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Architecture Documentation Sync
+        run: |
+          echo "Checking if ARCHITECTURE.md references match codebase..."
+
+          # Check that key components mentioned in diagrams exist in code
+          ERRORS=0
+
+          # Check for FastAPI app
+          if ! grep -q "FastAPI" main.py; then
+            echo "Warning: FastAPI not found in main.py but referenced in diagrams"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check for container specs
+          if ! grep -q "CONTAINER_SPECS" main.py; then
+            echo "Warning: CONTAINER_SPECS not found in main.py but referenced in diagrams"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check for key endpoints
+          for endpoint in "/health" "/pack" "/validate"; do
+            if ! grep -q "$endpoint" main.py; then
+              echo "Warning: Endpoint $endpoint not found in main.py but referenced in diagrams"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          # Check for key functions
+          for func in "calculate_packing" "find_best_orientation" "calculate_max_fit_for_orientation"; do
+            if ! grep -q "def $func" main.py; then
+              echo "Warning: Function $func not found in main.py but referenced in diagrams"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          # Check for Pydantic models
+          for model in "PackingItem" "PackingRequest" "PackingResponse" "PackingItemResult"; do
+            if ! grep -q "class $model" main.py; then
+              echo "Warning: Model $model not found in main.py but referenced in diagrams"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo ""
+            echo "Found $ERRORS potential sync issues between ARCHITECTURE.md and codebase"
+            echo "Please review and update ARCHITECTURE.md if needed"
+            # Don't fail the build, just warn
+          else
+            echo "All diagram references are in sync with codebase!"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Architecture Diagram Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✓ Mermaid syntax validated" >> $GITHUB_STEP_SUMMARY
+          echo "✓ Code references checked" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "View the architecture documentation in [ARCHITECTURE.md](../blob/main/ARCHITECTURE.md)" >> $GITHUB_STEP_SUMMARY
